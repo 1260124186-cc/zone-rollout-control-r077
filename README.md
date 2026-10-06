@@ -2,7 +2,7 @@
 
 Zone Rollout Control 是仅依赖 Go 标准库的本机 HTTP 控制面，用于协调区域版本上线。它管理滚动计划、不可变区域版本、解析节点租约、探针结果和一致性判定。
 
-本仓库是健康项目初始化基线。当前不包含单元测试、夹具或浏览器测试；测试工作有意延后到后续测试阶段。现在通过真实 HTTP 路由的生产探针验证构建和四条核心工作流。
+本仓库是健康项目初始化基线。当前不包含单元测试、夹具或浏览器测试；测试工作有意延后到后续测试阶段。现在通过真实 HTTP 路由的生产探针验证构建和五条核心工作流。
 
 ## 环境要求
 
@@ -113,6 +113,16 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/leases \
   }'
 ```
 
+换班时把租约移交给同区域另一可用节点：
+
+```bash
+curl -sS -X PATCH http://127.0.0.1:8090/v1/leases/<lease_id>/handover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "reason": "shift-change: on-call rotation"
+  }'
+```
+
 提交探针：
 
 ```bash
@@ -175,6 +185,7 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 | `PATCH` | `/v1/plans/{id}/complete` | 完成计划 |
 | `PATCH` | `/v1/plans/{id}/leases` | 给节点分配租约 |
 | `PATCH` | `/v1/leases/{id}/release` | 提前释放租约 |
+| `PATCH` | `/v1/leases/{id}/handover` | 把租约移交给同区域另一可用节点 |
 | `PATCH` | `/v1/leases/{id}/probes` | 登记探针并完成租约 |
 | `PATCH` | `/v1/plans/{id}/assessments` | 创建一致性判定 |
 | `GET` | `/v1/plans/{id}/assessments/latest` | 查询最近判定 |
@@ -186,6 +197,8 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 - A、AAAA、CNAME 条目在写入前规范化并稳定排序，重复条目直接拒绝。
 - 节点按 `ready -> leased -> ready` 变化，隔离节点不会被选中。
 - 一个节点同一时刻最多有一个 `claimed` 租约。
+- 租约移交把执行责任交给同区域另一 `ready` 节点：承接租约保留原截止时间、分配血缘和移交原因，原租约转为 `handed_over` 并指向承接租约。
+- 移交后探针只能提交到承接租约；重复移交、同区域无可用节点或截止时间已过都会明确失败。
 - 相同请求键和相同内容可安全重放；同键异载荷返回 `idempotency_conflict`。
 - 一致性判定综合节点覆盖率、序列号、成功比例和最大延迟，返回 `consistent` 或 `review_required`。
 - 所有校验和冲突在快照替换前返回，不留下部分状态。
@@ -209,13 +222,14 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 
 ## 验证
 
-测试阶段有意延后，因此当前不运行单元测试或浏览器测试。以下命令分别验证四条工作流；每条命令启动真实本机 HTTP 服务、使用独立临时状态、覆盖成功与失败路径，然后关闭服务：
+测试阶段有意延后，因此当前不运行单元测试或浏览器测试。以下命令分别验证五条工作流；每条命令启动真实本机 HTTP 服务、使用独立临时状态、覆盖成功与失败路径，然后关闭服务：
 
 ```bash
 go run ./cmd/workflowprobe plan-revision-lifecycle
 go run ./cmd/workflowprobe node-lease-allocation
 go run ./cmd/workflowprobe probe-ingestion
 go run ./cmd/workflowprobe consistency-assessment
+go run ./cmd/workflowprobe lease-handover
 ```
 
 探针不访问外部网络，也不依赖已有状态文件。

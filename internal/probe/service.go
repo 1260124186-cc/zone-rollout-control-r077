@@ -64,6 +64,13 @@ func (s *Service) Submit(
 			result = existing
 			return nil
 		}
+		if lease.State == domain.LeaseHandedOver {
+			return domain.NewError(domain.CodeLeaseNotClaimed, "lease was handed over; the successor lease accepts probes", map[string]any{
+				"lease_id":               leaseID,
+				"state":                  lease.State,
+				"superseded_by_lease_id": lease.SupersededByLeaseID,
+			})
+		}
 		if lease.State != domain.LeaseClaimed {
 			return domain.NewError(domain.CodeLeaseNotClaimed, "lease is not claimed", map[string]any{
 				"lease_id": leaseID,

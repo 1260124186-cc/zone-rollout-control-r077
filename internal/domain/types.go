@@ -21,10 +21,11 @@ const (
 type LeaseState string
 
 const (
-	LeaseClaimed  LeaseState = "claimed"
-	LeaseReported LeaseState = "reported"
-	LeaseReleased LeaseState = "released"
-	LeaseExpired  LeaseState = "expired"
+	LeaseClaimed    LeaseState = "claimed"
+	LeaseReported   LeaseState = "reported"
+	LeaseReleased   LeaseState = "released"
+	LeaseExpired    LeaseState = "expired"
+	LeaseHandedOver LeaseState = "handed_over"
 )
 
 type Verdict string
@@ -84,15 +85,36 @@ type ResolverNode struct {
 }
 
 type NodeLease struct {
-	ID           string     `json:"id"`
-	PlanID       string     `json:"plan_id"`
-	NodeID       string     `json:"node_id"`
-	AllocationID string     `json:"allocation_id"`
-	State        LeaseState `json:"state"`
-	ClaimedAt    time.Time  `json:"claimed_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	ProbeID      string     `json:"probe_id,omitempty"`
+	ID                  string         `json:"id"`
+	PlanID              string         `json:"plan_id"`
+	NodeID              string         `json:"node_id"`
+	AllocationID        string         `json:"allocation_id"`
+	State               LeaseState     `json:"state"`
+	ClaimedAt           time.Time      `json:"claimed_at"`
+	ExpiresAt           time.Time      `json:"expires_at"`
+	FinishedAt          *time.Time     `json:"finished_at,omitempty"`
+	ProbeID             string         `json:"probe_id,omitempty"`
+	SupersededByLeaseID string         `json:"superseded_by_lease_id,omitempty"`
+	Handover            *LeaseHandover `json:"handover,omitempty"`
+}
+
+// LeaseHandover 记录一次租约移交的血缘事实：执行责任从原节点切换到承接节点。
+// 它嵌在承接租约上，配合原租约的 superseded_by_lease_id 可以双向追溯整段移交链。
+type LeaseHandover struct {
+	PreviousLeaseID string    `json:"previous_lease_id"`
+	OriginLeaseID   string    `json:"origin_lease_id"`
+	Sequence        int       `json:"sequence"`
+	FromNodeID      string    `json:"from_node_id"`
+	ToNodeID        string    `json:"to_node_id"`
+	Reason          string    `json:"reason"`
+	At              time.Time `json:"at"`
+}
+
+// HandoverResult 是一次租约移交的完整结果：原租约、承接租约和移交事实在同一事务中落库。
+type HandoverResult struct {
+	Handover  LeaseHandover `json:"handover"`
+	FromLease NodeLease     `json:"from_lease"`
+	ToLease   NodeLease     `json:"to_lease"`
 }
 
 type LeaseGroup struct {

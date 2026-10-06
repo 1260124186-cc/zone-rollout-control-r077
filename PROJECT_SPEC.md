@@ -53,9 +53,22 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 计划对某个解析节点的有期限占用。
 
 - `id`、`plan_id`、`node_id`、`allocation_id`。
-- `state`：`claimed`、`reported`、`released` 或 `expired`。
+- `state`：`claimed`、`reported`、`released`、`expired` 或 `handed_over`。
 - `claimed_at`、`expires_at`、`finished_at`。
 - `probe_id`：成功登记探针后的结果标识。
+- `superseded_by_lease_id`：被移交后指向承接租约。
+- `handover`：仅承接租约携带的移交血缘记录。
+
+### LeaseHandover
+
+一次租约移交的血缘事实，嵌在承接租约上，与原租约的 `superseded_by_lease_id` 双向衔接。
+
+- `previous_lease_id`：被接替的上一段租约。
+- `origin_lease_id`：移交链上的第一段租约。
+- `sequence`：移交序号，从 1 开始沿链递增。
+- `from_node_id`、`to_node_id`：原节点与承接节点。
+- `reason`：移交原因。
+- `at`：移交时间。
 
 ### LeaseGroup
 
@@ -101,12 +114,22 @@ draft --activate--> active --complete--> completed
 ready --lease--> leased --report--> ready
                    |
                    +--release/expire--> ready
+                   +--handover--> ready（原节点），承接节点 ready --> leased
 ```
 
 - 隔离节点不能被分配。
 - 一个节点同一时刻最多有一个 `claimed` 租约。
 - 租约到期后不能提交探针。
 - 首次有效探针完成后，租约转为 `reported`，节点恢复 `ready`。
+
+### 租约移交
+
+- 只有 `claimed` 且未过期的租约可以移交；计划必须处于 `active`。
+- 承接节点必须是同区域另一个 `ready` 节点，按稳定顺序选择。
+- 承接租约保留原租约的 `expires_at`、`allocation_id` 和移交血缘，剩余截止时间不重置。
+- 原租约转为 `handed_over` 并指向承接租约，后续探针只能提交到承接租约。
+- 原节点、承接节点和计划版本在同一个事务中切换，并写入同一条审计事件。
+- 重复移交、同区域无可用节点或截止时间已过都会明确失败，且不留下部分状态。
 
 ### 区域版本规则
 
@@ -212,6 +235,21 @@ ready --lease--> leased --report--> ready
 
 失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要。
 
+### W5 租约移交
+
+入口：`PATCH /v1/leases/{id}/handover`。
+
+步骤：
+
+1. 入口校验移交原因。
+2. 分配服务确认租约仍为 `claimed`、截止时间未过、计划处于 `active`。
+3. 在同区域按稳定顺序选择另一个 `ready` 节点作为承接节点。
+4. 在一个事务中关闭原租约、写入带血缘的承接租约、切换两个节点状态并递增计划版本。
+
+成功行为：返回移交事实、原租约和承接租约；后续探针只能提交到承接租约。
+
+失败行为：重复移交、计划非活动、同区域无可用节点、截止时间已过或保存失败时保持原状态。
+
 ## 6. 模块边界
 
 | 模块 | 路径 | 责任 |
@@ -220,7 +258,7 @@ ready --lease--> leased --report--> ready
 | httpapi | `internal/httpapi` | 路由、严格解码、中间件和错误映射 |
 | plan | `internal/plan` | 计划生命周期和区域版本规则 |
 | fleet | `internal/fleet` | 解析节点档案、唯一名称和分页查询 |
-| allocation | `internal/allocation` | 节点筛选、幂等分配组和租约生命周期 |
+| allocation | `internal/allocation` | 节点筛选、幂等分配组、租约生命周期和移交 |
 | probe | `internal/probe` | 探针校验、幂等写入和租约完成 |
 | assessment | `internal/assessment` | 探针聚合和一致性判定 |
 | domain | `internal/domain` | 聚合、值校验、状态迁移和纯计算 |
@@ -257,6 +295,7 @@ ready --lease--> leased --report--> ready
 - `PATCH /v1/plans/{id}/complete`
 - `PATCH /v1/plans/{id}/leases`
 - `PATCH /v1/leases/{id}/release`
+- `PATCH /v1/leases/{id}/handover`
 - `PATCH /v1/leases/{id}/probes`
 - `PATCH /v1/plans/{id}/assessments`
 - `GET /v1/plans/{id}/assessments/latest`
@@ -282,5 +321,6 @@ ready --lease--> leased --report--> ready
 2. 节点分配、租约唯一性、幂等重放和无可用节点冲突。
 3. 探针首写、同键重放、同键异载荷冲突和释放冲突。
 4. 一致性通过、审核触发、最新结果查询和幂等重放。
+5. 租约移交、血缘保留、承接节点探针归属、重复移交和到期失败。
 
 每条探针使用独立临时目录，不访问外部网络，结束后关闭服务。

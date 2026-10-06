@@ -129,6 +129,142 @@ func (s *Service) Allocate(
 	return group, err
 }
 
+func (s *Service) Handover(
+	ctx context.Context,
+	leaseID string,
+	input domain.HandoverInput,
+) (domain.HandoverResult, error) {
+	if err := domain.ValidateHandoverInput(input); err != nil {
+		return domain.HandoverResult{}, err
+	}
+	input = domain.NormalizeHandoverInput(input)
+	now := s.clock.Now().UTC()
+	var result domain.HandoverResult
+
+	err := s.store.Write(ctx, func(state *domain.State) error {
+		lease, ok := state.Leases[leaseID]
+		if !ok {
+			return domain.NotFound("lease", leaseID)
+		}
+		switch lease.State {
+		case domain.LeaseClaimed:
+			// 只有未完成、未移交的租约可以移交。
+		case domain.LeaseHandedOver:
+			return domain.InvalidState("lease was already handed over", map[string]any{
+				"lease_id":               leaseID,
+				"state":                  lease.State,
+				"superseded_by_lease_id": lease.SupersededByLeaseID,
+			})
+		default:
+			return domain.InvalidState("only a claimed lease can be handed over", map[string]any{
+				"lease_id": leaseID,
+				"state":    lease.State,
+			})
+		}
+		if !now.Before(lease.ExpiresAt) {
+			return domain.NewError(domain.CodeLeaseExpired, "lease deadline has already passed", map[string]any{
+				"lease_id":   leaseID,
+				"expires_at": lease.ExpiresAt,
+			})
+		}
+		plan, ok := state.Plans[lease.PlanID]
+		if !ok {
+			return domain.NewError(domain.CodeStorageFailure, "lease references a missing plan", map[string]any{
+				"plan_id": lease.PlanID,
+			})
+		}
+		if plan.State != domain.PlanActive {
+			return domain.InvalidState("plan must be active for lease handover", map[string]any{
+				"plan_id": lease.PlanID,
+				"state":   plan.State,
+			})
+		}
+		fromNode, ok := state.Nodes[lease.NodeID]
+		if !ok {
+			return domain.NewError(domain.CodeStorageFailure, "lease references a missing node", map[string]any{
+				"node_id": lease.NodeID,
+			})
+		}
+		candidates := make([]domain.ResolverNode, 0)
+		for _, node := range state.Nodes {
+			if node.ID == fromNode.ID || node.State != domain.NodeReady || node.Region != fromNode.Region {
+				continue
+			}
+			candidates = append(candidates, node)
+		}
+		if len(candidates) == 0 {
+			return domain.NewError(domain.CodeNodeUnavailable, "no other ready node is available in the lease region", map[string]any{
+				"lease_id": leaseID,
+				"region":   fromNode.Region,
+			})
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].ID < candidates[j].ID
+		})
+		toNode := candidates[0]
+
+		originLeaseID := lease.ID
+		sequence := 1
+		if lease.Handover != nil {
+			originLeaseID = lease.Handover.OriginLeaseID
+			sequence = lease.Handover.Sequence + 1
+		}
+		handover := domain.LeaseHandover{
+			PreviousLeaseID: lease.ID,
+			OriginLeaseID:   originLeaseID,
+			Sequence:        sequence,
+			FromNodeID:      fromNode.ID,
+			ToNodeID:        toNode.ID,
+			Reason:          input.Reason,
+			At:              now,
+		}
+		successor := domain.NodeLease{
+			ID:           s.ids.New("lse"),
+			PlanID:       lease.PlanID,
+			NodeID:       toNode.ID,
+			AllocationID: lease.AllocationID,
+			State:        domain.LeaseClaimed,
+			ClaimedAt:    now,
+			ExpiresAt:    lease.ExpiresAt,
+			Handover:     &handover,
+		}
+		finishedAt := now
+		lease.State = domain.LeaseHandedOver
+		lease.FinishedAt = &finishedAt
+		lease.SupersededByLeaseID = successor.ID
+		state.Leases[lease.ID] = lease
+		state.Leases[successor.ID] = successor
+		if fromNode.State == domain.NodeLeased {
+			fromNode.State = domain.NodeReady
+			fromNode.Version++
+			fromNode.UpdatedAt = now
+			state.Nodes[fromNode.ID] = fromNode
+		}
+		toNode.State = domain.NodeLeased
+		toNode.Version++
+		toNode.UpdatedAt = now
+		state.Nodes[toNode.ID] = toNode
+		plan.Version++
+		state.Plans[plan.ID] = plan
+		store.AddAudit(state, s.ids, "lease", lease.ID, "handed_over", now, map[string]any{
+			"plan_id":      plan.ID,
+			"plan_version": plan.Version,
+			"to_lease_id":  successor.ID,
+			"from_node_id": fromNode.ID,
+			"to_node_id":   toNode.ID,
+			"reason":       handover.Reason,
+			"expires_at":   lease.ExpiresAt,
+		})
+		result = domain.HandoverResult{
+			Handover:  handover,
+			FromLease: lease,
+			ToLease:   successor,
+		}
+		return nil
+	})
+	return result, err
+}
+
 func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease, error) {
 	now := s.clock.Now().UTC()
 	var result domain.NodeLease
