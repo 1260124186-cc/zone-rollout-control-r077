@@ -21,10 +21,11 @@ const (
 type LeaseState string
 
 const (
-	LeaseClaimed  LeaseState = "claimed"
-	LeaseReported LeaseState = "reported"
-	LeaseReleased LeaseState = "released"
-	LeaseExpired  LeaseState = "expired"
+	LeaseClaimed    LeaseState = "claimed"
+	LeaseReported   LeaseState = "reported"
+	LeaseReleased   LeaseState = "released"
+	LeaseExpired    LeaseState = "expired"
+	LeaseHandedOver LeaseState = "handed_over"
 )
 
 type Verdict string
@@ -84,15 +85,37 @@ type ResolverNode struct {
 }
 
 type NodeLease struct {
-	ID           string     `json:"id"`
-	PlanID       string     `json:"plan_id"`
-	NodeID       string     `json:"node_id"`
-	AllocationID string     `json:"allocation_id"`
-	State        LeaseState `json:"state"`
-	ClaimedAt    time.Time  `json:"claimed_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	ProbeID      string     `json:"probe_id,omitempty"`
+	ID                  string     `json:"id"`
+	PlanID              string     `json:"plan_id"`
+	NodeID              string     `json:"node_id"`
+	AllocationID        string     `json:"allocation_id"`
+	State               LeaseState `json:"state"`
+	ClaimedAt           time.Time  `json:"claimed_at"`
+	ExpiresAt           time.Time  `json:"expires_at"`
+	FinishedAt          *time.Time `json:"finished_at,omitempty"`
+	ProbeID             string     `json:"probe_id,omitempty"`
+	HandoverFromLeaseID string     `json:"handover_from_lease_id,omitempty"`
+	HandoverToLeaseID   string     `json:"handover_to_lease_id,omitempty"`
+	HandoverReason      string     `json:"handover_reason,omitempty"`
+}
+
+type LeaseHandover struct {
+	ID            string    `json:"id"`
+	PlanID        string    `json:"plan_id"`
+	SourceLeaseID string    `json:"source_lease_id"`
+	TargetLeaseID string    `json:"target_lease_id"`
+	SourceNodeID  string    `json:"source_node_id"`
+	TargetNodeID  string    `json:"target_node_id"`
+	RequestKey    string    `json:"request_key"`
+	Reason        string    `json:"reason"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type LeaseHandoverResult struct {
+	Handover    LeaseHandover `json:"handover"`
+	SourceLease NodeLease     `json:"source_lease"`
+	TargetLease NodeLease     `json:"target_lease"`
 }
 
 type LeaseGroup struct {
@@ -150,6 +173,7 @@ type State struct {
 	Nodes                 map[string]ResolverNode      `json:"nodes"`
 	Leases                map[string]NodeLease         `json:"leases"`
 	LeaseGroups           map[string]LeaseGroup        `json:"lease_groups"`
+	Handovers             map[string]LeaseHandover     `json:"handovers"`
 	Probes                map[string]Probe             `json:"probes"`
 	Assessments           map[string]RolloutAssessment `json:"assessments"`
 	LeaseRequestKeys      map[string]string            `json:"lease_request_keys"`

@@ -113,6 +113,20 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/leases \
   }'
 ```
 
+换班时把未完成租约移交给同区域另一可用节点：
+
+```bash
+curl -sS -X PATCH http://127.0.0.1:8090/v1/leases/<lease_id>/handover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_key": "handover-request-0001",
+    "target_node_id": "<node_id>",
+    "reason": "shift change: operator rotation"
+  }'
+```
+
+移交在单个事务中完成：原租约转为 `handed_over` 并记录后继租约，承接节点获得保留原截止时间和血缘的新 `claimed` 租约，原节点恢复 `ready`。后续探针只能提交到承接租约。
+
 提交探针：
 
 ```bash
@@ -175,6 +189,7 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 | `PATCH` | `/v1/plans/{id}/complete` | 完成计划 |
 | `PATCH` | `/v1/plans/{id}/leases` | 给节点分配租约 |
 | `PATCH` | `/v1/leases/{id}/release` | 提前释放租约 |
+| `PATCH` | `/v1/leases/{id}/handover` | 把租约移交给同区域可用节点 |
 | `PATCH` | `/v1/leases/{id}/probes` | 登记探针并完成租约 |
 | `PATCH` | `/v1/plans/{id}/assessments` | 创建一致性判定 |
 | `GET` | `/v1/plans/{id}/assessments/latest` | 查询最近判定 |
@@ -186,6 +201,8 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 - A、AAAA、CNAME 条目在写入前规范化并稳定排序，重复条目直接拒绝。
 - 节点按 `ready -> leased -> ready` 变化，隔离节点不会被选中。
 - 一个节点同一时刻最多有一个 `claimed` 租约。
+- 租约移交把 `claimed` 租约的执行责任交给同区域另一 `ready` 节点：原租约转为 `handed_over`，承接租约保留原领取时间、截止时间和分配组，并记录移交原因。
+- 移交后探针只能由承接节点通过承接租约提交；重复移交、承接节点不可用或跨区域、截止时间已过都会明确失败，且不留下部分状态。
 - 相同请求键和相同内容可安全重放；同键异载荷返回 `idempotency_conflict`。
 - 一致性判定综合节点覆盖率、序列号、成功比例和最大延迟，返回 `consistent` 或 `review_required`。
 - 所有校验和冲突在快照替换前返回，不留下部分状态。
@@ -215,6 +232,7 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 go run ./cmd/workflowprobe plan-revision-lifecycle
 go run ./cmd/workflowprobe node-lease-allocation
 go run ./cmd/workflowprobe probe-ingestion
+go run ./cmd/workflowprobe lease-handover
 go run ./cmd/workflowprobe consistency-assessment
 ```
 

@@ -135,6 +135,27 @@
       ]
     },
     {
+      "id": "lease-handover",
+      "name": "Lease handover",
+      "entry": "PATCH /v1/leases/{id}/handover",
+      "steps": [
+        "validate the request key, target node, and handover reason",
+        "require a claimed lease, an active plan, and an unexpired deadline",
+        "require a ready target node in the same region as the current holder",
+        "switch both nodes and both leases and store the handover record in one transaction"
+      ],
+      "success": "the source lease becomes handed_over, the receiver holds a claimed lease that preserves the original window and lineage, and only the receiver can submit further probes",
+      "failure": "repeated handovers, inactive plans, expired deadlines, and unavailable or cross-region targets fail without partial state",
+      "verification": "workflowprobe lease-handover transfers a lease, checks lineage and probe attribution, and rejects repeated, invalid, and expired handovers",
+      "module_ids": [
+        "httpapi",
+        "allocation",
+        "probe",
+        "domain",
+        "storage"
+      ]
+    },
+    {
       "id": "consistency-assessment",
       "name": "Consistency assessment",
       "entry": "PATCH /v1/plans/{id}/assessments",

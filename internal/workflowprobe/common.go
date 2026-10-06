@@ -89,3 +89,28 @@ func submitProbe(
 	}, &result)
 	return result, err
 }
+
+func handover(
+	harness *harness,
+	leaseID string,
+	requestKey string,
+	targetNodeID string,
+	reason string,
+) (domain.LeaseHandoverResult, error) {
+	var result domain.LeaseHandoverResult
+	err := harness.call(http.MethodPatch, "/v1/leases/"+leaseID+"/handover", domain.HandoverInput{
+		RequestKey:   requestKey,
+		TargetNodeID: targetNodeID,
+		Reason:       reason,
+	}, &result)
+	return result, err
+}
+
+func pageHasNode(page domain.NodePage, nodeID string) bool {
+	for _, node := range page.Items {
+		if node.ID == nodeID {
+			return true
+		}
+	}
+	return false
+}

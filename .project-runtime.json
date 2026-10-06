@@ -21,6 +21,10 @@
       "command": "go run ./cmd/workflowprobe probe-ingestion"
     },
     {
+      "workflow_id": "lease-handover",
+      "command": "go run ./cmd/workflowprobe lease-handover"
+    },
+    {
       "workflow_id": "consistency-assessment",
       "command": "go run ./cmd/workflowprobe consistency-assessment"
     }

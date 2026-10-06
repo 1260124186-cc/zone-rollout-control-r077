@@ -53,9 +53,24 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 计划对某个解析节点的有期限占用。
 
 - `id`、`plan_id`、`node_id`、`allocation_id`。
-- `state`：`claimed`、`reported`、`released` 或 `expired`。
+- `state`：`claimed`、`reported`、`released`、`expired` 或 `handed_over`。
 - `claimed_at`、`expires_at`、`finished_at`。
 - `probe_id`：成功登记探针后的结果标识。
+- `handover_from_lease_id`：移交承接租约指向的前序租约。
+- `handover_to_lease_id`：被移交租约指向的后继租约。
+- `handover_reason`：租约移交时记录的原因。
+
+### LeaseHandover
+
+一次租约移交的不可变记录。
+
+- `id`、`plan_id`、`source_lease_id`、`target_lease_id`。
+- `source_node_id`、`target_node_id`。
+- `request_key`、`reason`。
+- `expires_at`：移交时保留的截止时间，与原租约一致。
+- `created_at`。
+
+移交不做幂等重放：同一租约只能移交一次，重复请求按非法状态明确失败。
 
 ### LeaseGroup
 
@@ -101,12 +116,16 @@ draft --activate--> active --complete--> completed
 ready --lease--> leased --report--> ready
                    |
                    +--release/expire--> ready
+                   |
+                   +--handover--> ready（承接节点 ready --> leased）
 ```
 
-- 隔离节点不能被分配。
+- 隔离节点不能被分配，也不能作为移交承接节点。
 - 一个节点同一时刻最多有一个 `claimed` 租约。
-- 租约到期后不能提交探针。
+- 租约到期后不能提交探针，也不能移交。
 - 首次有效探针完成后，租约转为 `reported`，节点恢复 `ready`。
+- 移交把 `claimed` 租约转为 `handed_over`，承接节点获得保留原 `claimed_at`、`expires_at` 和 `allocation_id` 的新 `claimed` 租约；原节点、承接节点和计划状态在同一事务中切换。
+- 移交后探针只能提交到承接租约，并按承接节点登记。
 
 ### 区域版本规则
 
@@ -212,6 +231,21 @@ ready --lease--> leased --report--> ready
 
 失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要。
 
+### W5 租约移交
+
+入口：`PATCH /v1/leases/{id}/handover`。
+
+步骤：
+
+1. 入口校验请求键、承接节点和移交原因。
+2. 分配服务确认租约仍为 `claimed`、截止时间未过、计划处于 `active`。
+3. 承接节点必须存在、与原节点同区域且处于 `ready`。
+4. 在一个事务中：原租约转为 `handed_over` 并记录后继租约与原因，承接节点获得保留原领取时间、截止时间和分配组的新 `claimed` 租约，原节点恢复 `ready`，承接节点转为 `leased`，写入不可变移交记录。
+
+成功行为：返回移交记录及交接双方租约；后续探针只能由承接节点通过承接租约提交。
+
+失败行为：重复移交、计划非活动、截止时间已过、承接节点缺失或不可用、跨区域或参数非法都不会修改状态；历史租约的血缘字段和移交记录仍能解释交接前后的来源。
+
 ## 6. 模块边界
 
 | 模块 | 路径 | 责任 |
@@ -257,6 +291,7 @@ ready --lease--> leased --report--> ready
 - `PATCH /v1/plans/{id}/complete`
 - `PATCH /v1/plans/{id}/leases`
 - `PATCH /v1/leases/{id}/release`
+- `PATCH /v1/leases/{id}/handover`
 - `PATCH /v1/leases/{id}/probes`
 - `PATCH /v1/plans/{id}/assessments`
 - `GET /v1/plans/{id}/assessments/latest`
@@ -281,6 +316,7 @@ ready --lease--> leased --report--> ready
 1. 计划创建、版本追加、激活、完成和非法重复迁移。
 2. 节点分配、租约唯一性、幂等重放和无可用节点冲突。
 3. 探针首写、同键重放、同键异载荷冲突和释放冲突。
-4. 一致性通过、审核触发、最新结果查询和幂等重放。
+4. 租约移交、血缘与截止时间保留、承接节点探针归属、重复移交和不可用节点失败。
+5. 一致性通过、审核触发、最新结果查询和幂等重放。
 
 每条探针使用独立临时目录，不访问外部网络，结束后关闭服务。

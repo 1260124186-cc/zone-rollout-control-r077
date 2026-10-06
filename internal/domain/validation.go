@@ -9,13 +9,14 @@ import (
 )
 
 const (
-	MaxZoneRunes       = 253
-	MaxAuthorityRunes  = 253
-	MaxNodeNameRunes   = 180
-	MaxRegionRunes     = 48
-	MinRequestKeyRunes = 8
-	MaxRequestKeyRunes = 64
-	MaxEntries         = 500
+	MaxZoneRunes           = 253
+	MaxAuthorityRunes      = 253
+	MaxNodeNameRunes       = 180
+	MaxRegionRunes         = 48
+	MinRequestKeyRunes     = 8
+	MaxRequestKeyRunes     = 64
+	MaxEntries             = 500
+	MaxHandoverReasonRunes = 200
 )
 
 type PlanCreateInput struct {
@@ -54,6 +55,12 @@ type ProbeInput struct {
 
 type AssessmentInput struct {
 	RequestKey string `json:"request_key"`
+}
+
+type HandoverInput struct {
+	RequestKey   string `json:"request_key"`
+	TargetNodeID string `json:"target_node_id"`
+	Reason       string `json:"reason"`
 }
 
 func NormalizePlanInput(input PlanCreateInput) PlanCreateInput {
@@ -245,6 +252,23 @@ func ValidateAssessmentInput(input AssessmentInput) error {
 		return Validation("assessment input is invalid", map[string]any{
 			"request_key": err.Error(),
 		})
+	}
+	return nil
+}
+
+func ValidateHandoverInput(input HandoverInput) error {
+	details := make(map[string]any)
+	if err := validateRequestKey(strings.TrimSpace(input.RequestKey)); err != nil {
+		details["request_key"] = err.Error()
+	}
+	if strings.TrimSpace(input.TargetNodeID) == "" {
+		details["target_node_id"] = "is required"
+	}
+	if count := utf8.RuneCountInString(strings.TrimSpace(input.Reason)); count < 1 || count > MaxHandoverReasonRunes {
+		details["reason"] = "must contain between 1 and 200 characters"
+	}
+	if len(details) > 0 {
+		return Validation("handover input is invalid", details)
 	}
 	return nil
 }

@@ -28,3 +28,17 @@ func (s *Server) releaseLease(w http.ResponseWriter, r *http.Request) {
 	}
 	sendData(w, r, http.StatusOK, lease)
 }
+
+func (s *Server) handoverLease(w http.ResponseWriter, r *http.Request) {
+	var input domain.HandoverInput
+	if err := decode(w, r, &input); err != nil {
+		sendError(w, r, err)
+		return
+	}
+	result, err := s.allocations.Handover(r.Context(), r.PathValue("id"), input)
+	if err != nil {
+		sendError(w, r, err)
+		return
+	}
+	sendData(w, r, http.StatusCreated, result)
+}
